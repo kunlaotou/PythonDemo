@@ -26,7 +26,7 @@ print(df)
 
 #如果嫌column name太长了，或者index是一列时间序列，更不好输入，那就可以选择 .iloc了。这边的 i 我觉得代表index，比较好记点。
 print(df.iloc[1,1])
-print(df.iloc[0:3, [0,1]])
+print(df.iloc[0:3, [0,1]]) 
 print(df.iloc[[0, 3, 5], 0:2])
 
 #ix 的功能就更强大了，它允许我们混合使用下标和名称进行选取。 可以说它涵盖了前面所有的用法。基本上把前面的都换成df.ix 都能成功
