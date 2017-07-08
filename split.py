@@ -35,3 +35,10 @@ u1,u2,u3 = u.split('.',2)
 print(u1) #www
 print(u2) #doiido
 print(u3) #com.cn
+
+
+#分离文件名和路径
+import os
+print(os.path.split('/dodo/soft/python/')) #('/dodo/soft/python', '')
+
+print(os.path.split('/dodo/soft/python')) #('/dodo/soft', 'python')
