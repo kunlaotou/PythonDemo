@@ -12,7 +12,10 @@ arange(start, end, step)，与range()类似，但是返回一个array对象。�
 """
 
 a =[ i for i in range(1,10,2)]
-print(a) #[1, 3, 5, 7, 9]
+print(a) #[1, 3, 5, 7, 9] range返回的是list对象
 
-b =[np.arange(1,10,2)]
-print(b)
+
+
+c = 18
+s = np.arange(c)
+print(s) #[ 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17]
