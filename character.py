@@ -16,3 +16,11 @@ print(a.find('t')) #73 第一次出现t的位置
 print(a.rfind('t')) #213 最后一次出现t的位置
 print(a.count('t')) #26 这句话出现t的次数
 print(a.isalnum()) #False 这段话所有的字符都输字母和数字吗？  
+
+print(a.strip('.')) #将字符收尾的.都删除掉
+print(a.capitalize()) #首字母变成大写
+print(a.upper()) #变大写
+print(a.lower()) #变小写
+print(a.swapcase()) #所有字母大小写转换
+
+print(a.replace('we','wee')) #替换
