@@ -1,35 +1,37 @@
-# -*- coding: utf8
-
-from __future__ import print_function
+import argparse
+import os
+import time
 
 import numpy as np
-import argparse
-import time
-import os
-
 import torch
 import torch.nn as nn
-import torch.optim as optim
+from PIL import Image
+from torch import optim
 from torch.autograd import Variable
-from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import MultiStepLR
+from torch.utils.data import Dataset
+from torchvision import transforms
 
-from dataset import MNIST, FashionMNIST, MNISTplusFashion
-from model import Multitask
 
-'''
-  F: FashionMNIST    M: MNIST   M+F: FashionMNIST + MNIST
 
-  F: 0.9359, 0.9374, 0.9363, 0.9394         (单模型在FashionMNIST上运行4次的结果)
-  M: 0.9934, 0.9953, 0.996, 0.993           (单模型在MNIST上运行4次的结果)
-  M+F: 0.9614, 0.9658                       (单模型在M+F上运行2次的结果)
-  M+F -> M: 0.9947, 0.9956, 0.9928          (multi-task在M+F上训练的参数 运用到M数据集上 运行三次的结果)
-  M+F -> F: 0.9261, 0.9373, 0.9383, 0.942   (multi-task在M+F上训练的参数 运用到F数据集上 运行三次的结果)
-  
-'''
 
-parser = argparse.ArgumentParser(description='PyTorch CNN Sentence Classification')   # 创建参数解析器对象parser，可添加参数
+# use PIL Image to read image
+from model import Multitask, AGNet
+
+
+def default_loader(path):
+    try:
+        img = Image.open(path)
+        return img.convert('RGB')
+    except:
+        print("Cannot read image: {}".format(path))
+
+
+#######################################
 # training configs
+#######################################
+parser = argparse.ArgumentParser(description='PyTorch CNN Sentence Classification')   # 创建参数解析器对象parser，可添加参数
+
 '''
      type： 把从命令行输入的结果转成设置的类型
   default： 设置参数的默认值
@@ -47,10 +49,16 @@ parser.add_argument('--batch-size', type=int, default=10,
 parser.add_argument('--test-batch-size', type=int, default=10,
                     help='input batch size for testing (default: 100)')
 
-parser.add_argument('--n-class', type=int, default=10,
-                    help='number of class (default: 10)')
+parser.add_argument('--n-class', type=int, default=6,
+                    help='number of class (default: 2)')
 
-parser.add_argument('--epochs', type=int, default=50,
+parser.add_argument('--age-class', type=int, default=4,
+                    help='number of class (default: 2)')
+
+parser.add_argument('--gender-class', type=int, default=2,
+                    help='number of class (default: 2)')
+
+parser.add_argument('--epochs', type=int, default=5,
                     help='number of epochs to train (default: 50)')
 
 parser.add_argument('--lr', type=float, default=1e-3,
@@ -69,7 +77,7 @@ parser.add_argument('--pre-trained', type=int, default=0,
                     help='using pre-trained model or not (default: 0)')
 
 # data
-parser.add_argument('--dataset', type=str, default='M+F',
+parser.add_argument('--dataset', type=str, default='PETA',
                     help='current dataset')
 
 # device
@@ -84,7 +92,10 @@ args.cuda = args.cuda and torch.cuda.is_available()
 params = "{}-{}-batch{}-epoch{}-lr{}-momentum{}-wdecay{}".format(args.dataset, args.optimizer, args.batch_size, args.epochs, args.lr, args.momentum, args.w_decay)
 print('args: {}\nparams: {}'.format(args, params))
 
+
+#######################################
 # define result file & model file
+#######################################
 result_dir = 'result'
 model_dir = 'model'
 for dir in [result_dir, model_dir]:
@@ -92,16 +103,99 @@ for dir in [result_dir, model_dir]:
     os.makedirs(dir)
 
 
+#######################################
 # load data
+#######################################
 """
-  train_data:torch TensorDataset format(提前处理好的)
   shuffle:要不要打乱数据(打乱较好)  
   num_workers:多线程来读取数据
 """
-train_data   = MNISTplusFashion(phase='train')
-train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4)
-val_data     = MNISTplusFashion(phase='val')
-val_loader   = DataLoader(val_data, batch_size=args.test_batch_size, shuffle=False, num_workers=4)
+data_transforms = {
+        'train': transforms.Compose([                                          # 将多个transform组合起来使用
+            transforms.RandomResizedCrop(224),                                 # 先将给定的Image随机切，然后再resize成给定的size大小
+            transforms.RandomHorizontalFlip(),                                 # 随机水平翻转给定的图片
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) # 给定均值：(R,G,B) 方差：（R，G，B）将会把Tensor正则化
+        ]),
+        'val': transforms.Compose([
+            transforms.Resize(256),                                            # 推荐用Resize，把图片重新改变大小成给定的`size`
+            transforms.CenterCrop(224),                                        # 在图片的中间区域进行裁剪
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) # 把一个取值范围是[0,255]的Image或者shape为(H,W,C)的
+                                                                               # numpy.ndarray， 转换成形状为[C,H,W]，
+                                                                               # 取值范围是[0,1.0]的torch.FloadTensor
+        ]),
+    }
+
+
+def getImg_gender_label(lines):
+    if 'personalMale' in lines:
+        return 1
+    if 'personalFemale' in lines:
+        return 0
+
+
+def getImg_age_label(lines):
+    if 'personalLess30' in lines:
+        return 0
+    if 'personalLess45' in lines:
+        return 1
+    if 'personalLess60' in lines:
+        return 2
+    if 'personalLarger60' in lines:
+        return 3
+
+class PETAData(Dataset):
+
+    def __init__(self, img_path, txt_path, dataset = '', data_transforms=None, loader = default_loader):
+        super(PETAData, self).__init__()
+        with open(txt_path) as input_file:
+            lines = input_file.readlines()
+            
+            # self.img_name = [os.path.join(img_path, line.strip().split()[0] + '_001.jpg') for line in lines]
+            # self.img_gender_label = [getImg_gender_label( line.strip().split()) for line in lines]
+            self.img_name = [line.split(",")[0] for line in lines]
+            self.img_gender_label = [int(line.split(",")[1]) for line in lines]
+            self.img_age_label = [int(line.split(",")[2]) for line in lines]
+            
+        self.data_transforms = data_transforms
+        self.dataset = dataset
+        self.loader = loader
+        self.img_path = img_path
+
+
+    def __len__(self):
+        return len(self.img_name)
+
+    def __getitem__(self, index):
+        img_name = self.img_name[index]
+        img_gender_label = self.img_gender_label[index]
+        img_age_label = self.img_age_label[index]
+        
+        img = self.loader(img_name)                               # 通过loader函数把img_name图片路径转换成RGB
+        if self.data_transforms is not None:
+            try:
+                img = self.data_transforms[self.dataset](img)
+            except BaseException:
+                print("Cannot transform image: {}".format(img))
+        return img, img_gender_label, img_age_label
+
+
+
+# 这样处理返回的image_datasets就和用torchvision.datasets.ImageFolder类返回的数据类型一样
+image_datasets = {x: PETAData(img_path='/home/tangwenhua/datasets/PETA/PETAdataset/CAVIAR4REID/archive',
+                              # txt_path='/home/tangwenhua/datasets/PETA/PETAdataset/CAVIAR4REID/archive/Label.txt',
+                              txt_path='train_list_gender_age.txt',
+                               dataset=x,
+                       data_transforms=data_transforms) for x in ['train', 'val']}
+
+
+dataloders = {x: torch.utils.data.DataLoader(image_datasets[x],
+                                            batch_size=args.batch_size,
+                                            shuffle=True) for x in ['train', 'val']}
+
+
+dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
 
 
 # get model
@@ -110,93 +204,162 @@ if args.pre_trained:
   accs = np.load(os.path.join(result_dir, params)+'.npy')
   print("Using cache")
 else:
-  print(train_data.n_class)
-  model = Multitask(n_class=train_data.n_class)
+  gender_model = Multitask(n_class=args.gender_class)
+  age_model = Multitask(n_class=args.age_class)
   accs = np.zeros(args.epochs)
 
 
 # use GPU
 if args.cuda:
   ts = time.time()
-  model = model.cuda()
+  gender_model = gender_model.cuda()
+  age_model = age_model.cuda()
   if args.multi_gpu:
     num_gpu = list(range(torch.cuda.device_count()))
-    model = nn.DataParallel(model, device_ids=num_gpu)
+    gender_model = nn.DataParallel(gender_model, device_ids=num_gpu)
+    age_model = nn.DataParallel(age_model, device_ids=num_gpu)
+	  
   print("Finish cuda loading, time elapsed {}".format(time.time() - ts))
 
 
 # define loss & optimizer
 if args.optimizer == 'Adam':
-  optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.w_decay)
+# optimizer是一个优化器对象，
+  gender_optimizer = optim.Adam(gender_model.parameters(), lr=args.lr, weight_decay=args.w_decay)
+  age_optimizer = optim.Adam(age_model.parameters(), lr=args.lr, weight_decay=args.w_decay)
 elif args.optimizer == 'SGD':
-  optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.w_decay)
+  gender_optimizer = optim.SGD(gender_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.w_decay)
+  age_optimizer = optim.SGD(age_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.w_decay)
 elif args.optimizer == 'RMSprop':
   optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.w_decay)
-scheduler = MultiStepLR(optimizer, milestones=[25], gamma=0.01)
-criterion = nn.BCEWithLogitsLoss()
+
+# MultiStepLR定义学习率的变化策略,表示每隔step_size个epoch，就将学习率降为原来的gamma倍
+gender_scheduler = MultiStepLR(gender_optimizer, milestones=[25], gamma=0.01)
+age_scheduler = MultiStepLR(age_optimizer, milestones=[25], gamma=0.01)
+criterion = nn.CrossEntropyLoss()
 
 
-"""
-  1.当执行enumerate(train_loader)的时候，是先调用DataLoader类的__iter__方法，该方法里面再调用DataLoaderIter类的初始化操作__init__。
-    而当执行for循环操作时，调用DataLoaderIter类的__next__方法，在该方法中通过self.collate_fn接口读取self.dataset数据时就会调用TSNDataSet类的__getitem__方法
-    从而完成数据的迭代读取。
-  
-"""
-def train(epoch):
-  model.train()                                                     # 设置为训练模式
-  for idx, batch in enumerate(train_loader):
-    optimizer.zero_grad()
-    if args.cuda:
-      batch['X'] = batch['X'].cuda()
-      batch['Y'] = batch['Y'].cuda()
-      
-    inputs, target = Variable(batch['X']), Variable(batch['Y'])     # 读取数据后将数据从Tensor转换成Variable格式
-  
-    output = model(inputs)                                          # 执行模型的前向计算，得到的output就是batch size*class维度的Variable
+def train_val(epoch):
+    since = time.time()
+    gender_best_acc = 0.0
+    age_best_acc = 0.0
+
+    for epoch in range(args.epochs):
+        begin_time = time.time()
+        print('Epoch {}/{}'.format(epoch, args.epochs - 1))
+        print('-' * 10)
+        idx = 0
+
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                gender_scheduler.step()   # 每次循环前都要更新下学习率，因为我们前面为学习率制定了学习策略
+                age_scheduler.step()
+                gender_model.train(True)  # Set model to training mode
+                age_model.train(True)  # Set model to training mode
+            else:
+                gender_model.train(False)  # Set model to evaluate mode
+                age_model.train(False)  # Set model to evaluate mode
+
+            gender_running_loss = 0.0
+            age_running_loss = 0.0
+            gender_running_corrects = 0
+            age_running_corrects = 0
+            
+            # Iterate over data.
+            for data in dataloders[phase]:
+                idx += 1
+                # get the inputs
+                inputs, gender_labels, age_labels = data
+
+                # wrap them in Variable
+                if args.cuda:
+                    inputs = Variable(inputs).cuda()
+                    gender_labels = Variable(gender_labels).cuda()
+                    age_labels = Variable(age_labels).cuda()
+                else:
+                    inputs, gender_labels, age_labels = Variable(inputs), Variable(gender_labels), Variable(age_labels)
+
+                # zero the parameter gradients
+                gender_optimizer.zero_grad()                   #将网络中的所有梯度置0：
+                age_optimizer.zero_grad()
+                
+
+                #print(inputs.size())  #torch.Size([10, 3, 224, 224])  10张图片 3个通道 224×224的图片
+                # forward
+                gender_outputs = gender_model(inputs)
+                age_outputs = age_model(inputs)
+                
+        
+                _, gender_preds = torch.max(gender_outputs.data, 1)
+                _, age_preds= torch.max(age_outputs.data, 1)
+                
     
-    loss = criterion(output, target)                                # 损失函数计算
-    loss.backward()                                                 # 损失回传
-    optimizer.step()                                                # 模型参数更新
-    if idx % args.log_interval == 0:                                # 输出信息
-      print("Training epoch {}, idx {}, loss {}".format(epoch, idx, loss.data[0]))
+                gender_loss = criterion(gender_outputs, gender_labels)
+                age_loss = criterion(age_outputs, age_labels)
+                
+                
+                # backward + optimize only if in training phase
+                if phase == 'train':
+                    gender_loss.backward()
+                    age_loss.backward()      # loss后就要回传损失。要注意的是这是在训练的时候才会有的操作，测试时候只有forward过程。
+
+                    gender_optimizer.step()  # 回传损失过程中会计算梯度，然后需要根据这些梯度更新参数，optimizer.step()就是用来更新参数的。optimizer.step()后，你就可以从optimizer.param_groups[0][‘params’]里面看到各个层的梯度和权值信息。
+                    age_optimizer.step()
+                
+                # statistics
+                gender_running_loss += gender_loss.data[0]
+                age_running_loss += age_loss.data[0]
+                
+                
+                age_running_corrects += torch.sum(age_preds == age_labels.data)
+                gender_running_corrects += torch.sum(gender_preds == gender_labels.data)
+                
+                # print result every 50 batch
+                if idx % 50 == 0:
+                    gender_batch_loss = gender_running_loss / (args.batch_size * idx)
+                    age_batch_loss = age_running_loss / (args.batch_size * idx)
+                    gender_batch_acc = gender_running_corrects.float() / (args.batch_size * idx)
+                    age_batch_acc = age_running_corrects.float() / (args.batch_size * idx)
+                    print('{} Epoch [{}] Batch [{}] genderLoss: {:.4f} ageLoss: {:.4f}  genderAcc: {:.4f} ageAcc: {:.4f} Time: {:.4f}s'. \
+                          format(phase, epoch, idx, gender_batch_loss, age_batch_loss, gender_batch_acc, age_batch_acc, time.time() - begin_time))
+                    begin_time = time.time()
+
+            
+            gender_epoch_loss = gender_running_loss / dataset_sizes[phase]
+            age_epoch_loss = age_running_loss / dataset_sizes[phase]
+            
+            gender_epoch_acc = gender_running_corrects.float() / dataset_sizes[phase]
+            age_epoch_acc = age_running_corrects.float() / dataset_sizes[phase]
+            print('{} genderLoss: {:.4f} ageLoss: {:.4f} genderAcc: {:.4f} ageAcc: {:.4f}'.format(phase, gender_epoch_loss, age_epoch_loss, gender_epoch_acc, age_epoch_acc))
+            # save model
+            if phase == 'train' and epoch == 50:
+                if not os.path.exists('output'):
+                    os.makedirs('output')
+                torch.save(gender_model, 'output/resnet_epoch{}.pkl'.format(epoch))
+                torch.save(age_model, 'output/resnet_epoch{}.pkl'.format(epoch))
+
+            # deep copy the model
+            if phase == 'val' and gender_epoch_acc > gender_best_acc:
+                gender_best_acc = gender_epoch_acc
+            if phase == 'val' and age_epoch_acc > age_best_acc:
+                age_best_acc = age_epoch_acc
+
+        time_elapsed = time.time() - since
+        print('Training complete in {:.0f}m {:.0f}s'.format(
+            time_elapsed // 60, time_elapsed % 60))
+    print('Best val genderAcc: {:4f} ageAcc: {:4f}'.format(gender_best_acc, age_best_acc))
 
 
-def val(epoch):
-  model.eval()                                                      # 设置为验证模式
-  val_loss = 0.
-  correct = 0
-  for idx, batch in enumerate(val_loader):
-    if args.cuda:
-      batch['X'] = batch['X'].cuda()
-      batch['Y'] = batch['Y'].cuda()
-    inputs, target = Variable(batch['X']), Variable(batch['Y'])
-    output = model(inputs)
-    
-    val_loss += criterion(output, target).data[0]                  # 为什么后面有一个data[0]
-    
-    pred = np.argmax(output.data.cpu().numpy(), axis=1)            # argmax返回最大值的索引
-    target = np.argmax(target.data.cpu().numpy(), axis=1)
-    correct += (pred == target).sum()                              # correct表示预测正确的个数
 
-  val_loss /= idx
-  acc = correct / len(val_data)
-  accs[epoch] = acc
-  np.save(os.path.join(result_dir, params), accs)                  # result_dir 为 'result'目录
-  if acc >= np.max(accs):
-    model_name = os.path.join(model_dir, params)
-    torch.save(model, model_name)
-  print("Validating epoch {}, val_loss {}, acc {:.4f}({}/{})".format(epoch, val_loss, acc, correct, len(val_data)))
+
+
 
 
 if __name__ == "__main__":
-  val(0)  # test initial performance before training
 
-  # train MNIST + fashionMNIST together
   print("Strat training")
-  for epoch in range(args.epochs):
-    scheduler.step()
-    ts = time.time()
-    train(epoch)
-    val(epoch)
-    print("Finish epoch {}, time elapsed {}".format(epoch, time.time() - ts))
-  print("Best val acc {}".format(np.max(accs)))
+  train_val(args.epochs)
+
+
+
