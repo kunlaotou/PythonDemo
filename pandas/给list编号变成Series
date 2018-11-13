@@ -1,0 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Nov 11 11:14:53 2018
+
+@author: wenhuatang
+"""
+import pandas as pd
+import numpy as np
+
+itemids = [100,200,300,400,500]
+itemidmap = pd.Series(data=np.arange(5), index=itemids)
+print(itemidmap)
+
+
+
+#注意 itemids的长度必须和arange里面的数字相同
