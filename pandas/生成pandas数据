@@ -1,0 +1,25 @@
+import pandas as pd
+import numpy as np
+df = pd.DataFrame({'A' : ['foo', 'bar', 'foo', 'bar',
+                              'foo', 'bar', 'foo', 'foo'],
+                       'B' : ['one', 'one', 'two', 'three',
+                              'two', 'two', 'one', 'three'],
+                       'C' : np.random.randn(8),
+                       'D' : np.random.randn(8)})
+print(df)
+print(df.groupby(['A'])['B'].count())
+
+
+
+     A      B         C         D
+0  foo    one  0.434959  1.247862
+1  bar    one -1.025529 -0.021019
+2  foo    two  0.602922  0.968845
+3  bar  three -1.238691 -0.247550
+4  foo    two -0.363613  1.053786
+5  bar    two  0.416837 -0.865794
+6  foo    one  0.657543  0.078479
+7  foo  three -1.218157  1.985127
+A
+bar    3
+foo    5
