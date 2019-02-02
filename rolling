@@ -1,0 +1,57 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jan 30 09:24:28 2019
+
+@author: tangwenhua
+"""
+
+import pandas as pd
+import warnings
+import os
+import matplotlib.pyplot as plt
+import datetime
+
+plt.rcParams['font.family'] = ['sans-serif']
+plt.rcParams['font.sans-serif'] = ['SimHei']
+
+warnings.filterwarnings('ignore')
+action_path = os.path.join('data', '201810.csv')
+
+
+
+if __name__ == '__main__':
+    start_date = pd.to_datetime('2018/10/1 0:00')
+    end_date = pd.to_datetime('2018/11/11 0:00')
+    
+    action = pd.read_csv(action_path)
+    
+    action[u'时段'] = pd.to_datetime(action['时段'],format='%Y/%m/%d %H:%M')
+    action = action[(action.时段 >= start_date) & (action.时段 < end_date)]
+    
+    Count = action[[u'总数','时段']]
+    Count['time_str'] = [x.strftime('%H:%M:%S') for x in Count[u'时段']]
+    print(Count)
+    Count['mean'] = [Count[( Count.时段 > (x[0]+datetime.timedelta(days=-10)) )  & (Count.时段 < x[0])  & (Count.time_str == x[1])][u'总数'].mean() for x in zip(Count[u'时段'],Count['time_str'])]
+    Count['std'] = [Count[( Count.时段 > (x[0]+datetime.timedelta(days=-10)) )  & (Count.时段 < x[0])  & (Count.time_str == x[1])][u'总数'].std() for x in zip(Count[u'时段'],Count['time_str'])]
+    print(Count)
+    #Count.to_csv('2018-10-10.csv',index=0) #不保存行索引
+    
+    
+    
+    Count['Alarm_up'] = Count['mean'] + 0.3 * Count['std']
+    Count['Alarm_down'] = Count['mean'] - 1 * Count['std']
+    
+    Count = Count[(Count.时段 >= '2018/10/10  0:00:00') & (Count.时段 < '2018/10/11  0:00:00')]
+    Count = Count.set_index([u'时段'])
+    
+    del Count['mean']
+    del Count['std']
+    
+    Count.plot()
+    
+    #save the pic
+    '''
+    ax = Count.plot()
+    fig = ax.get_figure()
+    fig.savefig(u'pic/201810_交易量/'+str(start_date).split()[0]+'.png')
+    '''
